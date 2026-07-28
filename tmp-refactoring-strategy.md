@@ -8,12 +8,12 @@
 
 ## Progress Summary
 
-| Item                                | Before | After                                | Status  |
-| ----------------------------------- | ------ | ------------------------------------ | ------- |
-| `src/config/schema.ts`              | 1,114  | 353 + 729 (field-metadata)           | ✅ Done |
-| `src/security/audit-extra.ts`       | 1,199  | 31 barrel + 559 (sync) + 668 (async) | ✅ Done |
-| `src/infra/session-cost-usage.ts`   | 984    | —                                    | Pending |
-| `src/media-understanding/runner.ts` | 1,232  | —                                    | Pending |
+| Item                                | Before | After                                               | Status  |
+| ----------------------------------- | ------ | --------------------------------------------------- | ------- |
+| `src/config/schema.ts`              | 1,114  | 353 + 729 (field-metadata)                          | ✅ Done |
+| `src/security/audit-extra.ts`       | 1,199  | 31 barrel + 559 (sync) + 668 (async)                | ✅ Done |
+| `src/infra/session-cost-usage.ts`   | 984    | 840 barrel + 167 (types) + 170 (parsers)            | ✅ Done |
+| `src/media-understanding/runner.ts` | 1,232  | 697 barrel + 113 (binary) + 190 (cli) + 325 (entry) | ✅ Done |
 
 ### All Targets (current LOC)
 
