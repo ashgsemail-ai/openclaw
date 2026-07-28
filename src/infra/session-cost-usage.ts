@@ -1,7 +1,16 @@
+/**
+ * Re-export barrel for session cost/usage analysis.
+ *
+ * Maintains backward compatibility with existing imports from session-cost-usage.
+ * Implementation split into:
+ * - session-cost-usage.types.ts: Type definitions
+ * - session-cost-usage.parsers.ts: Pure helper/parser functions (no I/O)
+ * - session-cost-usage.ts (this file): I/O functions (fs, readline)
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeUsage } from "../agents/usage.js";
@@ -9,303 +18,74 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 
-type CostBreakdown = {
-  total?: number;
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
+// Re-export all types for backward compatibility
+export type {
+  CostBreakdown,
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  CostUsageTotals,
+  DiscoveredSession,
+  ParsedTranscriptEntry,
+  ParsedUsageEntry,
+  SessionCostSummary,
+  SessionDailyLatency,
+  SessionDailyMessageCounts,
+  SessionDailyModelUsage,
+  SessionDailyUsage,
+  SessionLatencyStats,
+  SessionLogEntry,
+  SessionMessageCounts,
+  SessionModelUsage,
+  SessionToolUsage,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./session-cost-usage.types.js";
 
-type ParsedUsageEntry = {
-  usage: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  timestamp?: Date;
-};
+// Re-export all parser functions for backward compatibility
+export {
+  applyCostBreakdown,
+  applyCostTotal,
+  applyUsageTotals,
+  computeLatencyStats,
+  emptyTotals,
+  extractCostBreakdown,
+  formatDayKey,
+  parseTimestamp,
+  parseTranscriptEntry,
+  toFiniteNumber,
+} from "./session-cost-usage.parsers.js";
 
-type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
-  role?: "user" | "assistant";
-  timestamp?: Date;
-  durationMs?: number;
-  usage?: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  stopReason?: string;
-  toolNames: string[];
-  toolResultCounts: { total: number; errors: number };
-};
-
-export type CostUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  totalCost: number;
-  // Cost breakdown by token type (from actual API data when available)
-  inputCost: number;
-  outputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  missingCostEntries: number;
-};
-
-export type CostUsageDailyEntry = CostUsageTotals & {
-  date: string;
-};
-
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: CostUsageTotals;
-};
-
-export type SessionDailyUsage = {
-  date: string; // YYYY-MM-DD
-  tokens: number;
-  cost: number;
-};
-
-export type SessionDailyMessageCounts = {
-  date: string; // YYYY-MM-DD
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
-};
-
-export type SessionLatencyStats = {
-  count: number;
-  avgMs: number;
-  p95Ms: number;
-  minMs: number;
-  maxMs: number;
-};
-
-export type SessionDailyLatency = SessionLatencyStats & {
-  date: string; // YYYY-MM-DD
-};
-
-export type SessionDailyModelUsage = {
-  date: string; // YYYY-MM-DD
-  provider?: string;
-  model?: string;
-  tokens: number;
-  cost: number;
-  count: number;
-};
-
-export type SessionMessageCounts = {
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
-};
-
-export type SessionToolUsage = {
-  totalCalls: number;
-  uniqueTools: number;
-  tools: Array<{ name: string; count: number }>;
-};
-
-export type SessionModelUsage = {
-  provider?: string;
-  model?: string;
-  count: number;
-  totals: CostUsageTotals;
-};
-
-export type SessionCostSummary = CostUsageTotals & {
-  sessionId?: string;
-  sessionFile?: string;
-  firstActivity?: number;
-  lastActivity?: number;
-  durationMs?: number;
-  activityDates?: string[]; // YYYY-MM-DD dates when session had activity
-  dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
-  dailyMessageCounts?: SessionDailyMessageCounts[];
-  dailyLatency?: SessionDailyLatency[];
-  dailyModelUsage?: SessionDailyModelUsage[];
-  messageCounts?: SessionMessageCounts;
-  toolUsage?: SessionToolUsage;
-  modelUsage?: SessionModelUsage[];
-  latency?: SessionLatencyStats;
-};
-
-const emptyTotals = (): CostUsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
-
-const toFiniteNumber = (value: unknown): number | undefined => {
-  if (typeof value !== "number") {
-    return undefined;
-  }
-  if (!Number.isFinite(value)) {
-    return undefined;
-  }
-  return value;
-};
-
-const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
-  if (!usageRaw || typeof usageRaw !== "object") {
-    return undefined;
-  }
-  const record = usageRaw as Record<string, unknown>;
-  const cost = record.cost as Record<string, unknown> | undefined;
-  if (!cost) {
-    return undefined;
-  }
-
-  const total = toFiniteNumber(cost.total);
-  if (total === undefined || total < 0) {
-    return undefined;
-  }
-
-  return {
-    total,
-    input: toFiniteNumber(cost.input),
-    output: toFiniteNumber(cost.output),
-    cacheRead: toFiniteNumber(cost.cacheRead),
-    cacheWrite: toFiniteNumber(cost.cacheWrite),
-  };
-};
-
-const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
-  const raw = entry.timestamp;
-  if (typeof raw === "string") {
-    const parsed = new Date(raw);
-    if (!Number.isNaN(parsed.valueOf())) {
-      return parsed;
-    }
-  }
-  const message = entry.message as Record<string, unknown> | undefined;
-  const messageTimestamp = toFiniteNumber(message?.timestamp);
-  if (messageTimestamp !== undefined) {
-    const parsed = new Date(messageTimestamp);
-    if (!Number.isNaN(parsed.valueOf())) {
-      return parsed;
-    }
-  }
-  return undefined;
-};
-
-const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptEntry | null => {
-  const message = entry.message as Record<string, unknown> | undefined;
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-
-  const roleRaw = message.role;
-  const role = roleRaw === "user" || roleRaw === "assistant" ? roleRaw : undefined;
-  if (!role) {
-    return null;
-  }
-
-  const usageRaw =
-    (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  const usage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
-
-  const provider =
-    (typeof message.provider === "string" ? message.provider : undefined) ??
-    (typeof entry.provider === "string" ? entry.provider : undefined);
-  const model =
-    (typeof message.model === "string" ? message.model : undefined) ??
-    (typeof entry.model === "string" ? entry.model : undefined);
-
-  const costBreakdown = extractCostBreakdown(usageRaw);
-  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
-  const durationMs = toFiniteNumber(message.durationMs ?? entry.durationMs);
-
-  return {
-    message,
-    role,
-    timestamp: parseTimestamp(entry),
-    durationMs,
-    usage,
-    costTotal: costBreakdown?.total,
-    costBreakdown,
-    provider,
-    model,
-    stopReason,
-    toolNames: extractToolCallNames(message),
-    toolResultCounts: countToolResults(message),
-  };
-};
-
-const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
-
-const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined => {
-  if (!values.length) {
-    return undefined;
-  }
-  const sorted = values.toSorted((a, b) => a - b);
-  const total = sorted.reduce((sum, v) => sum + v, 0);
-  const count = sorted.length;
-  const p95Index = Math.max(0, Math.ceil(count * 0.95) - 1);
-  return {
-    count,
-    avgMs: total / count,
-    p95Ms: sorted[p95Index] ?? sorted[count - 1],
-    minMs: sorted[0],
-    maxMs: sorted[count - 1],
-  };
-};
-
-const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage) => {
-  totals.input += usage.input ?? 0;
-  totals.output += usage.output ?? 0;
-  totals.cacheRead += usage.cacheRead ?? 0;
-  totals.cacheWrite += usage.cacheWrite ?? 0;
-  const totalTokens =
-    usage.total ??
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  totals.totalTokens += totalTokens;
-};
-
-const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdown | undefined) => {
-  if (costBreakdown === undefined || costBreakdown.total === undefined) {
-    return;
-  }
-  totals.totalCost += costBreakdown.total;
-  totals.inputCost += costBreakdown.input ?? 0;
-  totals.outputCost += costBreakdown.output ?? 0;
-  totals.cacheReadCost += costBreakdown.cacheRead ?? 0;
-  totals.cacheWriteCost += costBreakdown.cacheWrite ?? 0;
-};
-
-// Legacy function for backwards compatibility (no cost breakdown available)
-const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) => {
-  if (costTotal === undefined) {
-    totals.missingCostEntries += 1;
-    return;
-  }
-  totals.totalCost += costTotal;
-};
+// Import types and parsers for use in this file
+import type {
+  CostUsageSummary,
+  CostUsageTotals,
+  DiscoveredSession,
+  ParsedTranscriptEntry,
+  ParsedUsageEntry,
+  SessionCostSummary,
+  SessionDailyLatency,
+  SessionDailyMessageCounts,
+  SessionDailyModelUsage,
+  SessionDailyUsage,
+  SessionLogEntry,
+  SessionMessageCounts,
+  SessionModelUsage,
+  SessionToolUsage,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./session-cost-usage.types.js";
+import {
+  applyCostBreakdown,
+  applyCostTotal,
+  applyUsageTotals,
+  computeLatencyStats,
+  emptyTotals,
+  extractCostBreakdown,
+  formatDayKey,
+  parseTranscriptEntry,
+} from "./session-cost-usage.parsers.js";
 
 async function scanTranscriptFile(params: {
   filePath: string;
@@ -457,13 +237,6 @@ export async function loadCostUsageSummary(params?: {
     totals,
   };
 }
-
-export type DiscoveredSession = {
-  sessionId: string;
-  sessionFile: string;
-  mtime: number;
-  firstUserMessage?: string;
-};
 
 /**
  * Scan all transcript files to discover sessions not in the session store.
@@ -829,23 +602,6 @@ export async function loadSessionCostSummary(params: {
   };
 }
 
-export type SessionUsageTimePoint = {
-  timestamp: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
-  cumulativeTokens: number;
-  cumulativeCost: number;
-};
-
-export type SessionUsageTimeSeries = {
-  sessionId?: string;
-  points: SessionUsageTimePoint[];
-};
-
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -917,14 +673,6 @@ export async function loadSessionUsageTimeSeries(params: {
 
   return { sessionId: params.sessionId, points: sortedPoints };
 }
-
-export type SessionLogEntry = {
-  timestamp: number;
-  role: "user" | "assistant" | "tool" | "toolResult";
-  content: string;
-  tokens?: number;
-  cost?: number;
-};
 
 export async function loadSessionLogs(params: {
   sessionId?: string;
